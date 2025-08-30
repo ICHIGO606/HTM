@@ -2,7 +2,7 @@ import { asyncHandler } from "../utils/AsyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Booking } from "../models/booking.models.js";
-import { Room } from "../models/room.model.js";
+import { Room } from "../models/room.models.js";
 import { Hotel } from "../models/hotel.models.js";
 
 // Create a booking

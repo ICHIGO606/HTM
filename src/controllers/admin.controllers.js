@@ -1,24 +1,24 @@
-
 import { asyncHandler } from "../utils/AsyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Hotel } from "../models/hotel.models.js";
 import { Room } from "../models/room.models.js";
-import { Booking } from "../models/booking.models.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 
+// ------------------- HOTEL CONTROLLERS ------------------- //
+
+// Create hotel
 const createHotel = asyncHandler(async (req, res) => {
   const { name, city, description, amenities, address } = req.body;
-  if (!name || !city || !description) {
-    throw new ApiError(401, "These details are required to create the hotel");
-  }
+  if (!name || !city || !description)
+    throw new ApiError(401, "Required fields missing");
 
   let imageUrls = [];
   if (req.files?.images) {
-    const uploadPromises = req.files.images.map((file) =>
-      uploadOnCloudinary(file.buffer, "hotels")
+    const uploadedImages = await Promise.all(
+      req.files.images.map(file => uploadOnCloudinary(file.path))
     );
-    imageUrls = await Promise.all(uploadPromises);
+    imageUrls = uploadedImages.filter(img => img).map(img => img.secure_url);
   }
 
   const newHotel = await Hotel.create({
@@ -31,23 +31,18 @@ const createHotel = asyncHandler(async (req, res) => {
     images: imageUrls,
   });
 
-  if (!newHotel) {
-    throw new ApiError(500, "Server error while creating the hotel");
-  }
-
   return res
     .status(200)
     .json(new ApiResponse(200, newHotel, "Hotel Created Successfully"));
 });
 
+// Update hotel
 const updateHotel = asyncHandler(async (req, res) => {
   const { hotelId } = req.params;
   const { name, city, description, amenities, address, images } = req.body;
 
   const hotel = await Hotel.findById(hotelId);
-  if (!hotel) {
-    throw new ApiError(404, "Hotel not found");
-  }
+  if (!hotel) throw new ApiError(404, "Hotel not found");
 
   if (name) hotel.name = name;
   if (city) hotel.city = city;
@@ -55,103 +50,69 @@ const updateHotel = asyncHandler(async (req, res) => {
   if (amenities) hotel.amenities = amenities;
   if (address) hotel.address = address;
 
-  // ✅ Handle new uploads
+  // Upload new images
   if (req.files?.images) {
-    const uploadPromises = req.files.images.map((file) =>
-      uploadOnCloudinary(file.buffer, "hotels")
+    const newUrls = await Promise.all(
+      req.files.images.map(file => uploadOnCloudinary(file.path))
     );
-    const newUploads = await Promise.all(uploadPromises);
-    hotel.images.push(...newUploads);
+    hotel.images.push(...newUrls);
   }
 
-  if (images) {
-    if (images.add && Array.isArray(images.add)) {
-      hotel.images.push(...images.add);
-    }
-    if (images.remove && Array.isArray(images.remove)) {
-      hotel.images = hotel.images.filter(
-        (img) => !images.remove.includes(img)
-      );
-    }
-  }
+  // Add/remove images from body
+  if (images?.add) hotel.images.push(...images.add);
+  if (images?.remove)
+    hotel.images = hotel.images.filter(img => !images.remove.includes(img));
 
   const updatedHotel = await hotel.save();
-
   return res
     .status(200)
     .json(new ApiResponse(200, updatedHotel, "Hotel updated successfully"));
 });
 
+// ------------------- ROOM CONTROLLERS ------------------- //
 
+// Utility to parse room numbers
 function parseRoomNumbers(input) {
   if (!input) return [];
-
-  // Ensure input is a string (if array is passed, join with commas)
   const str = Array.isArray(input) ? input.join(",") : String(input);
-
   const result = [];
-  str.split(",").forEach((part) => {
+  str.split(",").forEach(part => {
     if (part.includes("-")) {
       const [start, end] = part.split("-").map(Number);
-      if (!isNaN(start) && !isNaN(end) && start <= end) {
-        for (let i = start; i <= end; i++) {
-          result.push(i);
-        }
-      }
+      if (!isNaN(start) && !isNaN(end) && start <= end)
+        for (let i = start; i <= end; i++) result.push(i);
     } else {
       const num = Number(part.trim());
       if (!isNaN(num)) result.push(num);
     }
   });
-
   return result;
 }
 
+// Add or update room
 const addRoom = asyncHandler(async (req, res) => {
   const { hotelId } = req.params;
   let { type, pricePerNight, maxOccupancy, roomNumbers, amenities } = req.body;
-
-  if (!type || !pricePerNight || !maxOccupancy || !roomNumbers) {
+  if (!type || !pricePerNight || !maxOccupancy || !roomNumbers)
     throw new ApiError(400, "All fields are required");
-  }
 
-  // Parse ranges/comma-separated values into an array
   const parsedNumbers = parseRoomNumbers(roomNumbers);
-  if (parsedNumbers.length === 0) {
-    throw new ApiError(400, "Invalid room numbers format");
-  }
+  if (parsedNumbers.length === 0) throw new ApiError(400, "Invalid room numbers");
 
   let imageUrls = [];
   if (req.files?.images) {
-    const uploadPromises = req.files.images.map((file) =>
-      uploadOnCloudinary(file.buffer, "rooms")
-    );
-    imageUrls = await Promise.all(uploadPromises);
+    imageUrls = await Promise.all(req.files.images.map(file => uploadOnCloudinary(file.path)));
   }
 
   let existingRoom = await Room.findOne({ hotelId, type });
-
   if (existingRoom) {
-    existingRoom.roomNumbers = [
-      ...new Set([...existingRoom.roomNumbers, ...parsedNumbers]),
-    ];
+    existingRoom.roomNumbers = [...new Set([...existingRoom.roomNumbers, ...parsedNumbers])];
     existingRoom.pricePerNight = pricePerNight;
     existingRoom.maxOccupancy = maxOccupancy;
     if (amenities) existingRoom.amenities = amenities;
-    if (imageUrls.length > 0)
-      existingRoom.images = [...existingRoom.images, ...imageUrls];
-
+    if (imageUrls.length > 0) existingRoom.images.push(...imageUrls);
     await existingRoom.save();
-
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(
-          200,
-          existingRoom,
-          "Rooms updated successfully for existing type"
-        )
-      );
+    return res.status(200).json(new ApiResponse(200, existingRoom, "Rooms updated successfully"));
   }
 
   const newRoom = await Room.create({
@@ -164,26 +125,16 @@ const addRoom = asyncHandler(async (req, res) => {
     images: imageUrls,
   });
 
-  return res
-    .status(201)
-    .json(
-      new ApiResponse(
-        201,
-        newRoom,
-        "New room type added with rooms successfully"
-      )
-    );
+  return res.status(201).json(new ApiResponse(201, newRoom, "New room type added"));
 });
 
+// Update room
 const updateRoom = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
-  let { type, pricePerNight, maxOccupancy, roomNumbers, amenities, images } =
-    req.body;
+  const { type, pricePerNight, maxOccupancy, roomNumbers, amenities, images } = req.body;
 
   const room = await Room.findById(roomId);
-  if (!room) {
-    throw new ApiError(404, "Room not found");
-  }
+  if (!room) throw new ApiError(404, "Room not found");
 
   if (type) room.type = type;
   if (pricePerNight) room.pricePerNight = pricePerNight;
@@ -192,151 +143,114 @@ const updateRoom = asyncHandler(async (req, res) => {
 
   if (roomNumbers) {
     const parsedNumbers = parseRoomNumbers(roomNumbers);
-    if (parsedNumbers.length > 0) {
-      room.roomNumbers = [...new Set([...room.roomNumbers, ...parsedNumbers])];
-    }
+    if (parsedNumbers.length > 0) room.roomNumbers = [...new Set([...room.roomNumbers, ...parsedNumbers])];
   }
 
+  // Upload new images
   if (req.files?.images) {
-    const uploadPromises = req.files.images.map((file) =>
-      uploadOnCloudinary(file.buffer, "rooms")
-    );
-    const newUploads = await Promise.all(uploadPromises);
-    room.images.push(...newUploads);
+    const newUrls = await Promise.all(req.files.images.map(file => uploadOnCloudinary(file.path)));
+    room.images.push(...newUrls);
   }
 
-
-  if (images) {
-    if (images.add && Array.isArray(images.add)) {
-      room.images.push(...images.add);
-    }
-    if (images.remove && Array.isArray(images.remove)) {
-      room.images = room.images.filter((img) => !images.remove.includes(img));
-    }
-  }
+  // Add/remove images from body
+  if (images?.add) room.images.push(...images.add);
+  if (images?.remove) room.images = room.images.filter(img => !images.remove.includes(img));
 
   const updatedRoom = await room.save();
-
-  return res
-    .status(200)
-    .json(new ApiResponse(200, updatedRoom, "Room updated successfully"));
+  return res.status(200).json(new ApiResponse(200, updatedRoom, "Room updated successfully"));
 });
 
-
+// Delete room
 const deleteRoom = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
-  const { roomNumber } = req.body; // could be single, range, or comma separated
-
+  const { roomNumber } = req.body;
   const room = await Room.findById(roomId);
-  if (!room) {
-    throw new ApiError(404, "Room type not found");
-  }
+  if (!room) throw new ApiError(404, "Room type not found");
 
   if (roomNumber) {
     const parsedNumbers = parseRoomNumbers(roomNumber);
-
-    room.roomNumbers = room.roomNumbers.filter(
-      (num) => !parsedNumbers.includes(num)
-    );
+    room.roomNumbers = room.roomNumbers.filter(num => !parsedNumbers.includes(num));
     await room.save();
-
-    return res
-      .status(200)
-      .json(
-        new ApiResponse(
-          200,
-          room,
-          `Room numbers ${parsedNumbers.join(", ")} removed successfully`
-        )
-      );
+    return res.status(200).json(new ApiResponse(200, room, `Removed room numbers ${parsedNumbers.join(", ")}`));
   } else {
     await room.deleteOne();
-    return res
-      .status(200)
-      .json(new ApiResponse(200, {}, "Room type deleted successfully"));
+    return res.status(200).json(new ApiResponse(200, {}, "Room type deleted successfully"));
   }
 });
 
-const getHotels = asyncHandler(async (req, res) => {
-  const hotels = await Hotel.find({ adminId: req.user._id });
-  if (!hotels) {
-    throw new ApiError(404, "No hotels found for this user");
-  }
-  return res.status(200)
-  .json(new ApiResponse(200, hotels, "Hotels fetched successfully"));
-});
+const getAdminHotels = asyncHandler(async (req, res) => {
+  const adminId = req.user._id;
 
-const getRooms = asyncHandler(async (req, res) => {
-  const { hotelId } = req.params;
-  const rooms = await Room.find({ hotelId });
-  if (!rooms) {
-    throw new ApiError(404, "Unable to find the rooms for this hotel");
+  const hotels = await Hotel.find({ adminId });
+  if (!hotels || hotels.length === 0) {
+    throw new ApiError(404, "No hotels found for this admin");
   }
+
   return res
     .status(200)
-    .json(new ApiResponse(200, rooms, "Rooms fetched successfully"));
+    .json(new ApiResponse(200, hotels, "Hotels fetched successfully"));
 });
 
-const assignBooking = asyncHandler(async (req, res) => {
-  const { hotelId, roomId } = req.params;
-  const room = await Room.findOne({ _id: roomId, hotelId });
-  const {
-  checkInDate,
-  checkOutDate,
-  numberOfAdults,
-  numberOfChildren,
-  guests,
-  totalAmount,
-  paymentStatus,
-  bookingStatus,
-} = req.body;
-  if (!room) {
-    throw new ApiError(404, "Room not found in this hotel");
-  }
-  const overlap = await Booking.findOne({
-    roomId,
-    hotelId,
-    bookingStatus: "Confirmed", // only check against confirmed bookings
-    $or: [
-      {
-        checkInDate: { $lt: new Date(checkOutDate) },
-        checkOutDate: { $gt: new Date(checkInDate) },
-      },
-    ],
-  });
-  if (overlap) {
-    throw new ApiError(400, "Room is already booked for the given dates");
-  }
-  const user = req.user._id;
-  const bookingType = "Hotel";
-  
-  const booking = await Booking.create({
-    user,
-    hotelId,
-    roomId,
-    bookingType,
-    checkInDate,
-    checkOutDate,
-    numberOfAdults,
-    numberOfChildren,
-    totalAmount,
-    guests,
-    paymentStatus,
-    bookingStatus,
-  });
-  if(!booking){
-    return new ApiError(500,"Booking could not be made due to server error")
-  }
-  return res.status(200)
-  .json(new ApiResponse(200,booking,"Booking done successfully"))
+
+
+// Get bookings for a specific hotel (Admin)
+const getHotelBookings = asyncHandler(async (req, res) => {
+  const { hotelId } = req.params;
+
+  // Check if hotel belongs to this admin
+  const hotel = await Hotel.findOne({ _id: hotelId, adminId: req.user._id });
+  if (!hotel) throw new ApiError(404, "Hotel not found or not accessible by this admin");
+
+  // Fetch all bookings for this hotel
+  const bookings = await Booking.find({ hotelId })
+    .populate("roomId", "type roomNumbers")
+    .populate("user", "fullName email");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, bookings, "Bookings fetched successfully"));
 });
 
-export {
-  createHotel,
-  addRoom,
-  updateRoom,
-  deleteRoom,
-  getHotels,
-  getRooms,
-  updateHotel,
-};
+// Get all rooms with their booked status (Admin)
+const getHotelRoomsStatus = asyncHandler(async (req, res) => {
+  const { hotelId } = req.params;
+
+  // Check if hotel belongs to this admin
+  const hotel = await Hotel.findOne({ _id: hotelId, adminId: req.user._id });
+  if (!hotel) throw new ApiError(404, "Hotel not found or not accessible by this admin");
+
+  const rooms = await Room.find({ hotelId });
+
+  // For each room, check which roomNumbers are booked
+  const roomsWithStatus = await Promise.all(
+    rooms.map(async (room) => {
+      // Fetch confirmed bookings for this room
+      const bookings = await Booking.find({
+        roomId: room._id,
+        bookingStatus: "Confirmed",
+      });
+
+      // Flatten all booked roomNumbers
+      const bookedRoomNumbers = bookings.flatMap(b => b.roomNumbers);
+
+      const availableRoomNumbers = room.roomNumbers.filter(
+        rn => !bookedRoomNumbers.includes(rn)
+      );
+
+      return {
+        ...room.toObject(),
+        bookedRoomNumbers,
+        availableRoomNumbers,
+      };
+    })
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, roomsWithStatus, "Rooms status fetched successfully"));
+});
+
+
+
+
+export { createHotel, updateHotel, addRoom, updateRoom, deleteRoom,getAdminHotels,getHotelBookings, getHotelRoomsStatus  };

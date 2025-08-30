@@ -1,62 +1,66 @@
 import { Router } from "express";
 import { isAdmin, verifyJWT } from "../middlewares/auth.middleware.js";
-import { 
-  addRoom, 
-  createHotel, 
-  deleteRoom, 
-  getHotels, 
-  getRooms, 
-  updateRoom,
-  updateHotel
-} from "../controllers/admin.controllers.js";
 import { verifyHotelAdmin } from "../middlewares/verifyHotelAdmin.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
+import {
+  createHotel,
+  updateHotel,
+  addRoom,
+  updateRoom,
+  deleteRoom,
+  getAdminHotels,
+  getHotelRoomsStatus,
+  getHotelBookings,
+} from "../controllers/admin.controllers.js";
 
 const router = Router();
-
-
-router.route("/hotels").post(
+router.get("/hotels", verifyJWT, isAdmin, getAdminHotels);
+// Create hotel
+router.post(
+  "/hotels",
   verifyJWT,
   isAdmin,
   upload.fields([{ name: "images", maxCount: 10 }]),
   createHotel
 );
 
-
-router.route("/hotels/:hotelId").put(
+// Update hotel
+router.put(
+  "/hotels/:hotelId",
   verifyJWT,
   verifyHotelAdmin,
   upload.fields([{ name: "images", maxCount: 10 }]),
   updateHotel
 );
 
-router.route("/hotels").get(verifyJWT, getHotels);
-
-
-router.route("/hotels/:hotelId/rooms").post(
+// Add room to a hotel
+router.post(
+  "/hotels/:hotelId/rooms",
   verifyJWT,
   verifyHotelAdmin,
   upload.fields([{ name: "images", maxCount: 10 }]),
   addRoom
 );
 
-router.route("/hotels/:hotelId/rooms").get(
-  verifyJWT,
-  verifyHotelAdmin,
-  getRooms
-);
-
-router.route("/hotels/:hotelId/rooms/:roomId").put(
+// Update a room
+router.put(
+  "/hotels/:hotelId/rooms/:roomId",
   verifyJWT,
   verifyHotelAdmin,
   upload.fields([{ name: "images", maxCount: 10 }]),
   updateRoom
 );
 
-router.route("/hotels/:hotelId/rooms/:roomId").delete(
+// Delete a room
+router.delete(
+  "/hotels/:hotelId/rooms/:roomId",
   verifyJWT,
   verifyHotelAdmin,
   deleteRoom
 );
+router.get("/hotels/:hotelId/bookings", verifyJWT, verifyHotelAdmin, getHotelBookings);
+
+// Get all rooms with booked/available info (Admin)
+router.get("/hotels/:hotelId/rooms-status", verifyJWT, verifyHotelAdmin, getHotelRoomsStatus);
 
 export default router;
